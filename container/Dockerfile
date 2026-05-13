@@ -85,7 +85,7 @@ COPY . /app
 
 # 2. Fix the dependency install by pointing exactly to the folder we just copied
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    cd /app/agent-runner && bun install --frozen-lockfile
+    cd /app/container/agent-runner && bun install --frozen-lockfile
 
 # 3. Create the 'ncl' shortcut (Uses the src folder we just copied)
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
