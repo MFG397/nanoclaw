@@ -73,53 +73,29 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" && \
 # ---- agent-runner deps -------------------------------------------------------
 # Deps are cached independently of CLI versions. Source is NOT baked in —
 # it's provided by the shared RO mount at runtime.
-WORKDIR /app
-COPY . /app
-COPY agent-runner/package.json agent-runner/bun.lock ./
 
+
+
+
+# ---- Setup Workdir ----
+WORKDIR /app
+
+# 1. Bring in the ENTIRE project first (This solves the "not found" errors)
+COPY . /app
+
+# 2. Fix the dependency install by pointing exactly to the folder we just copied
 RUN --mount=type=cache,target=/root/.bun/install/cache \
     cd /app/agent-runner && bun install --frozen-lockfile
 
-# ---- pnpm + global Node CLIs -------------------------------------------------
-# Most stable first, most frequently bumped last. Bumping claude-code
-# (the most common change) only invalidates one layer.
-#
-# only-built-dependencies gates pnpm's supply-chain policy:
-#   - agent-browser has a postinstall build step.
-#   - @anthropic-ai/claude-code's postinstall downloads the native Claude
-#     binary (linux-arm64 variant on our image). Without the allowlist
-#     the SDK fails at spawn time with "native binary not found".
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-# Pin pnpm to match the host (package.json packageManager). pnpm 11 stopped
-# honoring `only-built-dependencies[]=` in .npmrc for global installs, which
-# silently skips claude-code's native-binary postinstall and agent-browser's
-# bin chmod — the agent then crashes at runtime with "native binary not
-# installed". Keep this in lockstep with package.json's `packageManager`.
-ARG PNPM_VERSION=10.33.0
-RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
-
-RUN --mount=type=cache,target=/root/.cache/pnpm \
-    echo "only-built-dependencies[]=agent-browser" > /root/.npmrc && \
-    echo "only-built-dependencies[]=@anthropic-ai/claude-code" >> /root/.npmrc && \
-    pnpm install -g "vercel@${VERCEL_VERSION}"
-
-RUN --mount=type=cache,target=/root/.cache/pnpm \
-    pnpm install -g "agent-browser@${AGENT_BROWSER_VERSION}"
-
-RUN --mount=type=cache,target=/root/.cache/pnpm \
-    pnpm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
-
-# ---- ncl CLI wrapper ----------------------------------------------------------
-# Actual script lives in the mounted source at /app/src/cli/ncl.ts.
+# 3. Create the 'ncl' shortcut (Uses the src folder we just copied)
 RUN printf '#!/bin/sh\nexec bun /app/src/cli/ncl.ts "$@"\n' > /usr/local/bin/ncl && \
     chmod +x /usr/local/bin/ncl
 
-# ---- Entrypoint --------------------------------------------------------------
+# 4. Correct the Entrypoint path (Pointing to the folder it's actually in)
 COPY container/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# ---- Workspace + permissions -------------------------------------------------
+# ---- Workspace + permissions ----
 RUN mkdir -p /workspace/group /workspace/extra && \
     chown -R node:node /workspace && \
     chmod 777 /home/node
@@ -127,6 +103,5 @@ RUN mkdir -p /workspace/group /workspace/extra && \
 USER node
 WORKDIR /workspace/group
 
-# tini is PID 1, reaps zombies, forwards signals cleanly. entrypoint.sh does
-# `exec bun ...` so bun runs as tini's direct child.
+# This tells the robot exactly how to start, ignoring Coolify's guesses
 ENTRYPOINT ["/usr/bin/tini", "--", "/app/entrypoint.sh"]
